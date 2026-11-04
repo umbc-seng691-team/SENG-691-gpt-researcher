@@ -88,6 +88,7 @@ async def generate_sub_queries(
     cfg: Config,
     cost_callback: callable = None,
     prompt_family: type[PromptFamily] | PromptFamily = PromptFamily,
+    num_queries: int | None = None,
     **kwargs
 ) -> List[str]:
     """
@@ -110,7 +111,7 @@ async def generate_sub_queries(
         query,
         parent_query,
         report_type,
-        max_iterations=cfg.max_iterations or 3,
+        max_iterations=num_queries or cfg.max_iterations or 3,
         context=context,
     )
 

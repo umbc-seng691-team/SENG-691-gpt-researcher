@@ -23,6 +23,9 @@ DEFAULT_CONFIG: BaseConfig = {
     "TOTAL_WORDS": 1200,
     "REPORT_FORMAT": "APA",
     "MAX_ITERATIONS": 3,
+    # Additional focused searches for the highest-ranked sub-questions.
+    "SUBQUESTION_DEEP_RESEARCH_TOP_K": 1,
+    "SUBQUESTION_DEEP_RESEARCH_EXTRA_QUERIES": 2,
     "AGENT_ROLE": None,
     "SCRAPER": "bs",
     "MAX_SCRAPER_WORKERS": 15,
