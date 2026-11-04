@@ -37,6 +37,7 @@
         'gpt-researcher/gptr/claude-skill',
         'gpt-researcher/gptr/example',
         'gpt-researcher/gptr/deep_research',
+        'gpt-researcher/gptr/ranked-sub-questions',
         'gpt-researcher/gptr/image_generation',
         'gpt-researcher/gptr/ai-development',
         'gpt-researcher/gptr/config',

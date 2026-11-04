@@ -11,7 +11,8 @@ import os
 import random
 
 from ..actions.agent_creator import choose_agent
-from ..actions.query_processing import get_search_results, plan_research_outline
+from ..actions.query_processing import generate_sub_queries, get_search_results, plan_research_outline
+from ..actions.sub_question_ranking import rank_sub_questions
 from ..actions.utils import stream_output
 from ..document import DocumentLoader, LangChainDocumentLoader, OnlineDocumentLoader
 from ..utils.enum import ReportSource, ReportType
@@ -46,6 +47,7 @@ class ResearchConductor:
         self._mcp_cache_lock = asyncio.Lock()
         # Track MCP query count for balanced mode
         self._mcp_query_count = 0
+        self._deep_research_queries = set()
 
     async def plan_research(self, query, query_domains=None):
         """Gets the sub-queries from the query
@@ -91,8 +93,63 @@ class ResearchConductor:
             retriever_names=retriever_names,  # Pass retriever names for MCP optimization
             **self.researcher.kwargs
         )
-        self.logger.info(f"Research outline planned: {outline}")
-        return outline
+        ranked_outline = await rank_sub_questions(
+            original_query=query,
+            questions=outline,
+            cfg=self.researcher.cfg,
+            cost_callback=self.researcher.add_costs,
+            **self.researcher.kwargs,
+        )
+        top_k = max(0, getattr(self.researcher.cfg, "subquestion_deep_research_top_k", 1))
+        self._deep_research_queries = {
+            item["question"] for item in ranked_outline[:top_k] if item["score"] > 0
+        }
+        self.logger.info(
+            "Ranked research sub-questions: %s",
+            [(item["question"], item["score"]) for item in ranked_outline],
+        )
+        return [item["question"] for item in ranked_outline]
+
+    async def _get_deeper_sub_queries(self, query, context=None):
+        """Expand only the highest-ranked questions into a bounded second pass."""
+        if query not in self._deep_research_queries:
+            return []
+        extra_queries = max(
+            0,
+            getattr(self.researcher.cfg, "subquestion_deep_research_extra_queries", 2),
+        )
+        if not extra_queries:
+            return []
+
+        try:
+            expanded = await generate_sub_queries(
+                query=query,
+                parent_query=self.researcher.parent_query,
+                report_type=self.researcher.report_type,
+                context=context or [],
+                cfg=self.researcher.cfg,
+                cost_callback=self.researcher.add_costs,
+                prompt_family=self.researcher.prompt_family,
+                num_queries=extra_queries,
+                **self.researcher.kwargs,
+            )
+        except Exception:
+            self.logger.exception(
+                "Could not generate deeper searches for '%s'; keeping first-pass evidence.",
+                query,
+            )
+            return []
+        seen = {query.casefold()}
+        focused = []
+        for item in expanded:
+            normalized = item.strip()
+            if normalized and normalized.casefold() not in seen:
+                seen.add(normalized.casefold())
+                focused.append(normalized)
+            if len(focused) >= extra_queries:
+                break
+        self.logger.info("Deeper follow-up searches for '%s': %s", query, focused)
+        return focused
 
     async def conduct_research(self):
         """Runs the GPT Researcher to conduct research"""
@@ -291,6 +348,19 @@ class ResearchConductor:
                 for sub_query in sub_queries
             ]
         )
+        for index, sub_query in enumerate(sub_queries):
+            deeper_queries = await self._get_deeper_sub_queries(sub_query, context[index])
+            if deeper_queries:
+                deeper_context = await asyncio.gather(
+                    *[
+                        self._process_sub_query_with_vectorstore(deeper_query, filter)
+                        for deeper_query in deeper_queries
+                    ]
+                )
+                merged_context = []
+                for item in [context[index], *deeper_context]:
+                    merged_context.extend(item if isinstance(item, list) else [item])
+                context[index] = merged_context
         return context
 
     async def _get_context_by_web_search(self, query, scraped_data: list | None = None, query_domains: list | None = None):
@@ -385,6 +455,25 @@ class ResearchConductor:
                     for sub_query in sub_queries
                 ]
             )
+            # The top-ranked sub-question gets one bounded expansion round.
+            # Lower-ranked questions retain the existing single-pass behavior.
+            for index, sub_query in enumerate(sub_queries):
+                deeper_queries = await self._get_deeper_sub_queries(sub_query, context[index])
+                if not deeper_queries:
+                    continue
+                deeper_contexts = []
+                for deeper_query in deeper_queries:
+                    deeper_data = await self._scrape_data_by_urls(deeper_query, query_domains)
+                    if deeper_data:
+                        deeper_context = await self.researcher.context_manager.get_similar_content_by_query(
+                            deeper_query, deeper_data
+                        )
+                        if deeper_context:
+                            deeper_contexts.append(deeper_context)
+                if deeper_contexts:
+                    context[index] = " ".join(
+                        str(part) for part in [context[index], *deeper_contexts] if part
+                    )
             self.logger.info(f"Gathered context from {len(context)} sub-queries")
             # Filter out empty results and join the context
             context = [c for c in context if c]

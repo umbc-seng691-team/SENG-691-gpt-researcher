@@ -346,25 +346,45 @@ async def write_report(research_request: ResearchRequest, research_id: str = Non
         return_researcher=True
     )
 
-    docx_path = await write_md_to_word(report_information[0], research_id)
-    pdf_path = await write_md_to_pdf(report_information[0], research_id)
     if research_request.report_type != "multi_agents":
         report, researcher = report_information
+        research_information = {
+            "source_urls": researcher.get_source_urls(),
+            "research_costs": researcher.get_costs(),
+            "visited_urls": list(researcher.visited_urls),
+            "research_images": researcher.get_research_images(),
+            # "research_sources": researcher.get_research_sources(),  # Raw content of sources may be very large
+        }
+    else:
+        # Multi-agent mode returns the report string directly; unlike other
+        # modes it does not return the (report, researcher) tuple.
+        report = report_information if isinstance(report_information, str) else ""
+        research_information = None
+
+    report = report if isinstance(report, str) else ""
+    if report.strip():
+        docx_path = await write_md_to_word(report, research_id)
+        pdf_path = await write_md_to_pdf(report, research_id)
+    else:
+        logger.warning("Skipping DOCX/PDF export because report generation returned empty content.")
+        docx_path = ""
+        pdf_path = ""
+
+    if research_request.report_type != "multi_agents":
         response = {
             "research_id": research_id,
-            "research_information": {
-                "source_urls": researcher.get_source_urls(),
-                "research_costs": researcher.get_costs(),
-                "visited_urls": list(researcher.visited_urls),
-                "research_images": researcher.get_research_images(),
-                # "research_sources": researcher.get_research_sources(),  # Raw content of sources may be very large
-            },
+            "research_information": research_information,
             "report": report,
             "docx_path": docx_path,
             "pdf_path": pdf_path
         }
     else:
-        response = { "research_id": research_id, "report": "", "docx_path": docx_path, "pdf_path": pdf_path }
+        response = {
+            "research_id": research_id,
+            "report": report,
+            "docx_path": docx_path,
+            "pdf_path": pdf_path,
+        }
 
     return response
 
