@@ -6,6 +6,7 @@ retrieval, compression, and similarity matching for research queries.
 
 import asyncio
 from typing import Dict, List, Optional, Set
+from ..context.select import select_context
 
 from ..actions.utils import stream_output
 from ..context.compression import (
@@ -52,15 +53,14 @@ class ContextManager:
                 self.researcher.websocket,
             )
 
-        context_compressor = ContextCompressor(
-            documents=pages,
-            embeddings=self.researcher.memory.get_embeddings(),
-            similarity_threshold=getattr(self.researcher.cfg, "similarity_threshold", None),
+        return await select_context(
+            query,
+            pages,
+            self.researcher.cfg,
+            max_results=10,
             prompt_family=self.researcher.prompt_family,
-            **self.researcher.kwargs
-        )
-        return await context_compressor.async_get_context(
-            query=query, max_results=10, cost_callback=self.researcher.add_costs
+            cost_callback=self.researcher.add_costs,
+            embeddings=lambda: self.researcher.memory.get_embeddings(),
         )
 
     async def get_similar_content_by_query_with_vectorstore(self, query: str, filter: dict | None) -> str:
