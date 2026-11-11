@@ -197,11 +197,10 @@ class JevContextCompressor:
         # Overly similar passages removed
         duplicated_removed = remove_duplicate_passages(
             selected,
-            threshold=0.65
+            threshold=0.55
         )
         logger.info(
             f"Duplicates removed {len(selected) - len(duplicated_removed)} "
-            f"duplicate passages. "
             f"Remaining: {len(duplicated_removed)}"
         )
 

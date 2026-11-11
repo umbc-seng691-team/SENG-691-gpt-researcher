@@ -112,12 +112,12 @@ async def select_context(
     # Uses remove_duplicate function to remove overly similar functions passed a threshold of 65%
     duplicates_removed = remove_duplicate_passages(
         selected,
-        threshold=0.65
+        threshold=0.55
     )
 
     logger.info(
         f"Duplicated removed {len(selected) - len(duplicates_removed)} "
-        f"duplicate passages. Remaining: {len(duplicates_removed)}"
+        f"Remaining: {len(duplicates_removed)}"
     )
 
     # Format remaining acceptable passages
