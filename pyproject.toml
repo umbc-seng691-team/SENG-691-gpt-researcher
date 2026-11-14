@@ -174,7 +174,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
-    "pytest>=8.0",
+    "pytest>=8.0,<9",
     "pytest-asyncio>=0.24",
     "pytest-timeout>=2.3",
     "pytest-forked>=1.6",
