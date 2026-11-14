@@ -171,19 +171,10 @@ class ResearchConductor:
             research_data = await self._get_context_by_web_search(self.researcher.query, document_data, self.researcher.query_domains)
         # Hybrid search including both local documents and web sources
         elif self.researcher.report_source == ReportSource.Hybrid.value:
-            if self.researcher.document_urls:
-                document_data = await OnlineDocumentLoader(self.researcher.document_urls).load()
-            else:
-                document_data = await DocumentLoader(self.researcher.cfg.doc_path).load()
-            if self.researcher.vector_store:
-                self.researcher.vector_store.load(document_data)
-            # The local-docs pass and the web pass are independent, so run
-            # them concurrently; visited_urls still dedupes across both.
-            docs_context, web_context = await asyncio.gather(
-                self._get_context_by_web_search(self.researcher.query, document_data, self.researcher.query_domains),
-                self._get_context_by_web_search(self.researcher.query, [], self.researcher.query_domains),
+            research_data = await self._get_context_by_hybrid_search(
+                self.researcher.query,
+                self.researcher.query_domains,
             )
-            research_data = self.researcher.prompt_family.join_local_web_documents(docs_context, web_context)
         elif self.researcher.report_source == ReportSource.Azure.value:
             from ..document.azure_document_loader import AzureDocumentLoader
             azure_loader = AzureDocumentLoader(
@@ -239,6 +230,88 @@ class ResearchConductor:
 
         self.logger.info(f"Research completed. Context size: {len(str(self.researcher.context))}")
         return self.researcher.context
+
+    @staticmethod
+    def _context_to_text(context) -> str:
+        """Convert a context result to text before joining the two sources."""
+        if isinstance(context, str):
+            return context.strip()
+        if isinstance(context, (list, tuple)):
+            return "\n".join(str(item).strip() for item in context if item).strip()
+        return str(context).strip() if context else ""
+
+    async def _get_context_by_hybrid_search(self, query, query_domains=None):
+        """Search local documents and the web at the same time."""
+        query_domains = query_domains or []
+
+        async def search_local_documents():
+            if self.researcher.document_urls:
+                document_data = await OnlineDocumentLoader(
+                    self.researcher.document_urls
+                ).load()
+            else:
+                document_data = await DocumentLoader(
+                    self.researcher.cfg.doc_path
+                ).load()
+
+            self.logger.info(
+                "Loaded %s local document(s) for hybrid research",
+                len(document_data),
+            )
+            if self.researcher.vector_store:
+                self.researcher.vector_store.load(document_data)
+            return await self._get_context_by_web_search(
+                query,
+                document_data,
+                query_domains,
+            )
+
+        async def search_web():
+            return await self._get_context_by_web_search(
+                query,
+                [],
+                query_domains,
+            )
+
+        self.logger.info("Starting local and web research in parallel")
+        local_result, web_result = await asyncio.gather(
+            search_local_documents(),
+            search_web(),
+            return_exceptions=True,
+        )
+
+        for source_name, result in (
+            ("local", local_result),
+            ("web", web_result),
+        ):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, Exception):
+                self.logger.error(
+                    "%s research failed, so hybrid mode will use the other source: %s",
+                    source_name.capitalize(),
+                    result,
+                )
+
+        local_context = (
+            ""
+            if isinstance(local_result, Exception)
+            else self._context_to_text(local_result)
+        )
+        web_context = (
+            ""
+            if isinstance(web_result, Exception)
+            else self._context_to_text(web_result)
+        )
+
+        if not local_context and not web_context:
+            self.logger.warning("Hybrid research did not return any context")
+            return []
+
+        return self.researcher.prompt_family.join_local_web_documents(
+            local_context,
+            web_context,
+        )
 
     async def _get_context_by_urls(self, urls):
         """Scrapes and compresses the context from the given urls"""
